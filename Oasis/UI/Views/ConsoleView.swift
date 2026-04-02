@@ -158,8 +158,6 @@ struct ConsoleView: View {
 
     private func commandRow(_ command: String, createdAt: Date) -> some View {
         HStack(alignment: .center, spacing: 0) {
-            leftPromptColumn
-
             HStack(spacing: 0) {
                 segmentTag(
                     text: terminalPath,
@@ -192,7 +190,7 @@ struct ConsoleView: View {
                 )
 
                 segmentTag(
-                    text: currentTimeOnly,
+                    text: formattedCommandTime(createdAt),
                     fg: AppTheme.textMuted,
                     bg: Color(AppTheme.accent),
                     nextBG: .clear
@@ -206,8 +204,6 @@ struct ConsoleView: View {
     
     private func livePromptRow(_ currentInput: String, cursorVisible: Bool, runtimeReady: Bool) -> some View {
         HStack(alignment: .center, spacing: 0) {
-            leftPromptColumn
-
             HStack(spacing: 0) {
                 segmentTag(
                     text: terminalPath,
@@ -273,23 +269,6 @@ struct ConsoleView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 1)
-    }
-
-    private var leftPromptColumn: some View {
-        HStack(spacing: 0) {
-            Text("􀎟")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(Color.black.opacity(0.82))
-                .frame(width: 20, height: 18)
-                .background(
-                    Color(AppTheme.blueAccentSoft)
-                )
-
-            PowerChevron()
-                .fill(Color(AppTheme.blueAccentSoft))
-                .frame(width: 12, height: 18)
-        }
-        .padding(.trailing, 4)
     }
 
     private var leftLogColumn: some View {
@@ -394,74 +373,137 @@ struct ConsoleView: View {
     }
 
     private func styleForLine(_ line: ConsoleLine) -> StyledConsoleLine {
-        let text = line.text
+        let parsed = parseConsolePrefixes(from: line.text)
 
-        if text.hasPrefix("[runtime]") {
+        let effectiveKind = resolveEffectiveKind(
+            originalKind: line.kind,
+            message: parsed.message,
+            sourceTag: parsed.sourceTag
+        )
+
+        if let sourceTag = parsed.sourceTag {
             return StyledConsoleLine(
-                tag: "[runtime] ",
-                tagColor: Color(nsColor: NSColor(calibratedRed: 0.48, green: 0.75, blue: 0.96, alpha: 1)),
-                message: text.replacingOccurrences(of: "[runtime] ", with: ""),
-                textColor: Color(AppTheme.greenStatus)
+                tag: sourceTag + " ",
+                tagColor: colorForSourceTag(sourceTag, kind: effectiveKind),
+                message: parsed.message,
+                textColor: colorForMessage(kind: effectiveKind, sourceTag: sourceTag)
             )
         }
 
-        if text.hasPrefix("[bot]") {
-            return StyledConsoleLine(
-                tag: "[bot] ",
-                tagColor: Color(nsColor: NSColor(calibratedRed: 0.57, green: 0.86, blue: 0.42, alpha: 1)),
-                message: text.replacingOccurrences(of: "[bot] ", with: ""),
-                textColor: Color(AppTheme.greenStatus)
-            )
+        return StyledConsoleLine(
+            tag: effectiveKind.symbol,
+            tagColor: effectiveKind.tagColor,
+            message: parsed.message,
+            textColor: effectiveKind.textColor
+        )
+    }
+    
+    //MARK: estilo
+    
+    private func parseConsolePrefixes(from rawText: String) -> (sourceTag: String?, message: String) {
+        var text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var detectedTag: String?
+
+        let knownTags = ["[runtime]", "[bot]", "[stderr]"]
+
+        for tag in knownTags {
+            if text.hasPrefix(tag) {
+                detectedTag = tag
+                text = text.replacingOccurrences(of: tag, with: "", options: [.anchored])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
         }
 
-        switch line.kind {
-        case .input:
-            return StyledConsoleLine(
-                tag: nil,
-                tagColor: .clear,
-                message: text,
-                textColor: AppTheme.textPrimary
-            )
+        return (detectedTag, text)
+    }
 
-        case .success:
-            return StyledConsoleLine(
-                tag: AppTheme.runSymbol,
-                tagColor: Color(nsColor: NSColor(calibratedRed: 0.60, green: 0.84, blue: 0.19, alpha: 1)),
-                message: text,
-                textColor: Color(nsColor: NSColor(calibratedRed: 0.80, green: 0.90, blue: 0.68, alpha: 1))
-            )
+    private func resolveEffectiveKind(
+        originalKind: ConsoleLine.Kind,
+        message: String,
+        sourceTag: String?
+    ) -> ConsoleLine.Kind {
+        let lower = message.lowercased()
 
-        case .warning:
-            return StyledConsoleLine(
-                tag: AppTheme.warningSymbol,
-                tagColor: Color(nsColor: NSColor(calibratedRed: 0.97, green: 0.79, blue: 0.23, alpha: 1)),
-                message: text,
-                textColor: Color(nsColor: NSColor(calibratedRed: 0.93, green: 0.86, blue: 0.64, alpha: 1))
-            )
+        if sourceTag == "[stderr]" {
+            return .error
+        }
 
-        case .error:
-            return StyledConsoleLine(
-                tag: AppTheme.errorSymbol,
-                tagColor: Color(nsColor: NSColor(calibratedRed: 0.96, green: 0.41, blue: 0.34, alpha: 1)),
-                message: text,
-                textColor: Color(nsColor: NSColor(calibratedRed: 0.95, green: 0.71, blue: 0.66, alpha: 1))
-            )
+        if originalKind == .error || lower.contains("error") || lower.contains("failed") || lower.contains("exception") {
+            return .error
+        }
 
-        case .system:
-            return StyledConsoleLine(
-                tag: AppTheme.eyeSymbol,
-                tagColor: Color.white.opacity(0.48),
-                message: text,
-                textColor: Color.white.opacity(0.66)
-            )
+        if originalKind == .warning || lower.contains("warning") || lower.contains("deteniendo") || lower.contains("termino") {
+            return .warning
+        }
 
-        case .service:
-            return StyledConsoleLine(
-                tag: nil,
-                tagColor: .clear,
-                message: text,
-                textColor: Color.white.opacity(0.72)
-            )
+        if originalKind == .success || lower.contains("success") || lower.contains("iniciado") || lower.contains("activo") || lower.contains("ready") || lower.contains("finalizado") {
+            return .success
+        }
+        
+        if originalKind == .info || lower.contains("info") || lower.contains("informacion") {
+            return .info
+        }
+
+        return originalKind
+    }
+
+    private func colorForSourceTag(_ tag: String, kind: ConsoleLine.Kind) -> Color {
+        switch tag {
+        case "[runtime]":
+            if kind == .error {
+                return Color(nsColor: NSColor(calibratedRed: 0.96, green: 0.41, blue: 0.34, alpha: 1))
+            }
+            if kind == .warning {
+                return Color(nsColor: NSColor(calibratedRed: 0.97, green: 0.79, blue: 0.23, alpha: 1))
+            }
+            return Color(nsColor: NSColor(calibratedRed: 0.48, green: 0.75, blue: 0.96, alpha: 1))
+
+        case "[bot]":
+            if kind == .error {
+                return Color(nsColor: NSColor(calibratedRed: 0.96, green: 0.41, blue: 0.34, alpha: 1))
+            }
+            if kind == .warning {
+                return Color(nsColor: NSColor(calibratedRed: 0.97, green: 0.79, blue: 0.23, alpha: 1))
+            }
+            return Color(nsColor: NSColor(calibratedRed: 0.57, green: 0.86, blue: 0.42, alpha: 1))
+
+        case "[stderr]":
+            return Color(nsColor: NSColor(calibratedRed: 0.96, green: 0.41, blue: 0.34, alpha: 1))
+
+        default:
+            return kind.tagColor
+        }
+    }
+
+    private func colorForMessage(kind: ConsoleLine.Kind, sourceTag: String?) -> Color {
+        if sourceTag == "[stderr]" {
+            return Color(nsColor: NSColor(calibratedRed: 0.95, green: 0.71, blue: 0.66, alpha: 1))
+        }
+
+        switch sourceTag {
+        case "[runtime]":
+            switch kind {
+            case .error:
+                return Color(nsColor: NSColor(calibratedRed: 0.95, green: 0.71, blue: 0.66, alpha: 1))
+            case .warning:
+                return Color(nsColor: NSColor(calibratedRed: 0.93, green: 0.86, blue: 0.64, alpha: 1))
+            default:
+                return Color(nsColor: NSColor(calibratedRed: 0.76, green: 0.86, blue: 0.92, alpha: 1))
+            }
+
+        case "[bot]":
+            switch kind {
+            case .error:
+                return Color(nsColor: NSColor(calibratedRed: 0.95, green: 0.71, blue: 0.66, alpha: 1))
+            case .warning:
+                return Color(nsColor: NSColor(calibratedRed: 0.93, green: 0.86, blue: 0.64, alpha: 1))
+            default:
+                return Color(nsColor: NSColor(calibratedRed: 0.84, green: 0.91, blue: 0.82, alpha: 1))
+            }
+
+        default:
+            return kind.textColor
         }
     }
 }

@@ -15,7 +15,7 @@ final class BotProcessManager: ObservableObject {
     @Published var logs: String = ""
     @Published var statusText: String = "Detenido"
     @Published var lastError: String?
-
+    
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
@@ -36,34 +36,34 @@ final class BotProcessManager: ObservableObject {
         guard !isRunning else { return }
 
         guard let configStore else {
-            appendLog(AppTheme.errorSymbol + " OasisConfigStore no está conectado.\n")
+            appendLog("error OasisConfigStore no está conectado.\n")
             statusText = "Config no disponible"
             return
         }
 
         configStore.saveAll()
 
-        guard !configStore.telegramBotToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            appendLog(AppTheme.errorSymbol + " Falta Telegram Bot Token.\n")
+        guard !configStore.telegramBotToken.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
+            appendLog("error Falta Telegram Bot Token.\n")
             statusText = "Token faltante"
             return
         }
 
-        guard !configStore.config.telegram.allowedUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            appendLog(AppTheme.errorSymbol + "Falta Allow User ID.\n")
+        guard !configStore.config.telegram.allowedUserID.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
+            appendLog("error Falta Allow User ID.\n")
             statusText = "User ID faltante"
             return
         }
 
         guard FileManager.default.fileExists(atPath: workingDirectory) else {
-            appendLog(AppTheme.errorSymbol + " No existe la carpeta del bot: \(workingDirectory)\n")
+            appendLog("error No existe la carpeta del bot: \(workingDirectory)\n")
             statusText = "Ruta inválida"
             lastError = "La carpeta del bot no existe."
             return
         }
 
         guard FileManager.default.fileExists(atPath: nodePath) else {
-            appendLog(AppTheme.errorSymbol + " No existe Node en: \(nodePath)\n")
+            appendLog("error No existe Node en: \(nodePath)\n")
             statusText = "Node no encontrado"
             lastError = "No se encontró Node en la ruta configurada."
             return
@@ -74,6 +74,7 @@ final class BotProcessManager: ObservableObject {
         let errPipe = Pipe()
 
         task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        task.arguments = ["core/boot.js"]
         task.arguments = [
             "-lc",
             "cd \(quoted(workingDirectory)) && \(quoted(nodePath)) bot.js"
@@ -113,10 +114,10 @@ final class BotProcessManager: ObservableObject {
 
                 if proc.terminationStatus == 0 {
                     self.statusText = "Detenido"
-                    self.appendLog(AppTheme.sucessSymbol + "\n Proceso finalizado correctamente.\n")
+                    self.appendLog("\n Proceso finalizado correctamente.\n")
                 } else {
                     self.statusText = "Error"
-                    self.appendLog(AppTheme.warningSymbol + "\n El proceso terminó con código \(proc.terminationStatus).\n")
+                    self.appendLog("\n El proceso termino con código \(proc.terminationStatus).\n")
                 }
             }
         }
@@ -125,12 +126,12 @@ final class BotProcessManager: ObservableObject {
             try task.run()
             isRunning = true
             statusText = "Activo"
-            appendLog(AppTheme.runSymbol + " Bot iniciado en: \(workingDirectory)\n")
+            appendLog("Bot iniciado en: \(workingDirectory)\n")
         } catch {
             isRunning = false
             statusText = "Error al iniciar"
             lastError = error.localizedDescription
-            appendLog(AppTheme.errorSymbol + " No se pudo iniciar el bot: \(error.localizedDescription)\n")
+            appendLog("error No se pudo iniciar el bot: \(error.localizedDescription)\n")
         }
     }
 
@@ -139,7 +140,7 @@ final class BotProcessManager: ObservableObject {
 
         if process.isRunning {
             statusText = "Deteniendo..."
-            appendLog(AppTheme.stopSymbol + " Deteniendo bot...\n")
+            appendLog("Deteniendo bot...\n")
             process.terminate()
         } else {
             isRunning = false

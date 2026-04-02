@@ -42,6 +42,9 @@ enum AppTheme {
     static let systemTagColor = Color.white.opacity(0.48)
     static let systemTextColor = Color.white.opacity(0.66)
     
+    static let shieldTagColor = Color.white.opacity(0.48)
+    static let shieldTextColor = Color.white.opacity(0.66)
+    
     static let servicesTextColor = Color.white.opacity(0.72)
     
     static let errorSymbol = "􀃱"

@@ -50,7 +50,7 @@ final class SkillRuntimeProcessManager: ObservableObject {
                     self.isRunning = true
                     self.ownsRunningProcess = false
                     self.statusText = "Activo"
-                    self.appendLogImmediately(AppTheme.shieldSymbol + " Ya había un skill runtime corriendo en 127.0.0.1:4872.\n")
+                    self.appendLogImmediately("info Ya había un skill runtime corriendo en 127.0.0.1:4872.\n")
                     return
                 }
 
@@ -61,14 +61,14 @@ final class SkillRuntimeProcessManager: ObservableObject {
 
     private func startOwnedProcess() {
         guard FileManager.default.fileExists(atPath: workingDirectory) else {
-            appendLogImmediately(AppTheme.errorSymbol + " No existe la carpeta base: \(workingDirectory)\n")
+            appendLogImmediately("error No existe la carpeta base: \(workingDirectory)\n")
             statusText = "Ruta inválida"
             lastError = "La carpeta base no existe."
             return
         }
 
         guard FileManager.default.fileExists(atPath: runtimeScriptPath) else {
-            appendLogImmediately(AppTheme.errorSymbol + " No existe skill-runtime/server.js en: \(runtimeScriptPath)\n")
+            appendLogImmediately("error No existe skill-runtime/server.js en: \(runtimeScriptPath)\n")
             statusText = "Runtime no encontrado"
             lastError = "No se encontró server.js del skill runtime."
             return
@@ -119,10 +119,10 @@ final class SkillRuntimeProcessManager: ObservableObject {
 
                 if proc.terminationStatus == 0 {
                     self.statusText = "Detenido"
-                    self.appendLogImmediately(AppTheme.sucessSymbol + "\n Skill runtime finalizado correctamente.\n")
+                    self.appendLogImmediately("\n Skill runtime finalizado correctamente.\n")
                 } else {
                     self.statusText = "Error"
-                    self.appendLogImmediately(AppTheme.warningSymbol + "\n Skill runtime terminó con código \(proc.terminationStatus).\n")
+                    self.appendLogImmediately("\n Skill runtime termino con código \(proc.terminationStatus).\n")
                 }
             }
         }
@@ -134,14 +134,14 @@ final class SkillRuntimeProcessManager: ObservableObject {
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
                 guard let self, self.isRunning else { return }
-                self.appendLogImmediately(AppTheme.runSymbol + " Skill runtime gateway activo en http://127.0.0.1:4872\n")
+                self.appendLogImmediately("Skill runtime gateway activo en http://127.0.0.1:4872\n")
             }
         } catch {
             isRunning = false
             ownsRunningProcess = false
             statusText = "Error al iniciar"
             lastError = error.localizedDescription
-            appendLogImmediately(AppTheme.errorSymbol + "No se pudo iniciar el skill runtime: \(error.localizedDescription)\n")
+            appendLogImmediately("error No se pudo iniciar el skill runtime: \(error.localizedDescription)\n")
         }
     }
 
@@ -155,7 +155,7 @@ final class SkillRuntimeProcessManager: ObservableObject {
 
         if process.isRunning {
             statusText = "Deteniendo..."
-            appendLogImmediately(AppTheme.stopSymbol + " Deteniendo skill runtime...\n")
+            appendLogImmediately("Deteniendo skill runtime...\n")
             process.terminate()
         } else {
             isRunning = false
