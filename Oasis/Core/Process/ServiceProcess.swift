@@ -39,7 +39,7 @@ class ServiceProcess: ObservableObject {
 
         guard FileManager.default.isExecutableFile(atPath: executable) else {
             status = "Error"
-            appendLog("❌ Executable not found for \(name): \(executable)\n")
+            appendLog(AppTheme.errorSymbol + " Executable not found for \(name): \(executable)\n")
             return
         }
 
@@ -83,7 +83,7 @@ class ServiceProcess: ObservableObject {
                     self.status = "Stopped"
                 } else {
                     self.status = "Exited (\(proc.terminationStatus))"
-                    self.appendLog("⚠️ \(self.name) exited with code \(proc.terminationStatus)\n")
+                    self.appendLog(AppTheme.warningSymbol + " \(self.name) exited with code \(proc.terminationStatus)\n")
                 }
             }
         }
@@ -92,12 +92,12 @@ class ServiceProcess: ObservableObject {
             try task.run()
             isRunning = true
             status = "Running"
-            appendLog("🚀 \(name) started\n")
+            appendLog(AppTheme.runSymbol + " \(name) started\n")
             appendLog("→ \(executable) \(arguments.joined(separator: " "))\n")
             appendLog("→ cwd: \(workingDirectory)\n")
         } catch {
             status = "Error"
-            appendLog("❌ Failed to start \(name): \(error.localizedDescription)\n")
+            appendLog("Failed to start \(name): \(error.localizedDescription)\n")
         }
     }
 
@@ -107,7 +107,7 @@ class ServiceProcess: ObservableObject {
         process.terminate()
         isRunning = false
         status = "Stopped"
-        appendLog("🛑 \(name) stopped\n")
+        appendLog(AppTheme.errorSymbol + " \(name) stopped\n")
     }
 
     func appendLog(_ text: String) {

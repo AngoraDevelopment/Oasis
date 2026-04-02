@@ -7,17 +7,16 @@
 
 import Foundation
 
-enum OasisConfig {
-    static let rootPath = "/Users/edgardoramos/Oasis"
-    static let nodePath = "/usr/local/bin/node"
+struct TelegramConfig: Codable, Equatable {
+    var allowedUserID: String = ""
+}
 
-    static let telegramBotToken = "PON_AQUI_TU_TOKEN"
-    static let allowedUserID = "PON_AQUI_TU_USER_ID"
+struct OllamaConfig: Codable, Equatable {
+    var primaryModel: String = "ollama/phi4-mini:latest"
+    var fallbackModels: [String] = ["ollama/phi4-mini:latest"]
+}
 
-    static let ollamaModel = "phi4-mini:latest"
-    static let ollamaUrl = "http://127.0.0.1:11434/api/chat"
-    static let ollamaFallbackModels = [
-        "mistral",
-        "qwen2.5-coder:7b"
-    ]
+struct OasisConfig: Codable, Equatable {
+    var telegram: TelegramConfig = .init()
+    var ollama: OllamaConfig = .init()
 }

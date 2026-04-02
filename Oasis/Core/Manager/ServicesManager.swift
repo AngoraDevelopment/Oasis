@@ -21,26 +21,58 @@ struct ConsoleLine: Identifiable, Equatable {
     let id = UUID()
     let text: String
     let kind: Kind
+    let createdAt: Date
+
+    init(text: String, kind: Kind, createdAt: Date = Date()) {
+        self.text = text
+        self.kind = kind
+        self.createdAt = createdAt
+    }
 }
 
 @MainActor
 final class ServicesManager: ObservableObject {
-    @Published var bot = BotService()
-    @Published var runtime = RuntimeService()
     @Published var consoleLines: [ConsoleLine] = []
+
+    let configStore: OasisConfigStore
+    let botManager: BotProcessManager
+    let runtimeManager: SkillRuntimeProcessManager
 
     private var cancellables: Set<AnyCancellable> = []
     private var lastBotLogLength: Int = 0
     private var lastRuntimeLogLength: Int = 0
 
-    init() {
+    @MainActor
+    init(
+        configStore: OasisConfigStore,
+        botManager: BotProcessManager,
+        runtimeManager: SkillRuntimeProcessManager
+    ) {
+        self.configStore = configStore
+        self.botManager = botManager
+        self.runtimeManager = runtimeManager
+
+        self.botManager.setConfigStore(configStore)
+
         bindServiceLogs()
     }
 
+    @MainActor
+    convenience init() {
+        let configStore = OasisConfigStore()
+        let botManager = BotProcessManager()
+        let runtimeManager = SkillRuntimeProcessManager()
+        self.init(
+            configStore: configStore,
+            botManager: botManager,
+            runtimeManager: runtimeManager
+        )
+    }
+
     var overallStatusText: String {
-        let botState = bot.isRunning ? "bot:on" : "bot:off"
-        let runtimeState = runtime.isRunning ? "runtime:on" : "runtime:off"
-        return "\(botState)  \(runtimeState)"
+        let bot = botManager.isRunning ? "bot:on" : "bot:off"
+        let runtime = runtimeManager.isRunning ? "runtime:on" : "runtime:off"
+        return "\(bot)  \(runtime)"
     }
 
     func handleCommand(_ raw: String) {
@@ -60,15 +92,8 @@ final class ServicesManager: ObservableObject {
         case "status":
             printStatus()
 
-        case "start all":
-            startAll()
-
-        case "stop all":
-            stopAll()
-
-        case "restart all":
-            stopAll()
-            startAll()
+        case "doctor":
+            doctor()
 
         case "start runtime":
             startRuntime()
@@ -77,8 +102,7 @@ final class ServicesManager: ObservableObject {
             stopRuntime()
 
         case "restart runtime":
-            stopRuntime()
-            startRuntime()
+            restartRuntime()
 
         case "start bot":
             startBot()
@@ -87,15 +111,20 @@ final class ServicesManager: ObservableObject {
             stopBot()
 
         case "restart bot":
-            stopBot()
-            startBot()
+            restartBot()
 
-        case "doctor":
-            doctor()
+        case "start all":
+            startAll()
+
+        case "stop all":
+            stopAll()
+
+        case "restart all":
+            restartAll()
 
         default:
-            appendLine("Unknown command: \(command)", kind: .error)
-            appendLine("Type 'help' to see available commands.", kind: .warning)
+            appendLine(" Unknown command: \(command)", kind: .error)
+            appendLine(" Type 'help' to see available commands.", kind: .warning)
         }
     }
 
@@ -103,139 +132,201 @@ final class ServicesManager: ObservableObject {
         appendLine(text, kind: .system)
     }
 
-    func startAll() {
-        startRuntime()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.startBot()
-        }
-    }
-
-    func stopAll() {
-        stopBot()
-        stopRuntime()
-    }
-
     func startRuntime() {
-        if runtime.isRunning {
-            appendLine("Skill runtime is already running.", kind: .warning)
+        if runtimeManager.isRunning {
+            appendLine(" Skill runtime is already running.", kind: .warning)
             return
         }
 
-        runtime.start()
-        appendLine("Starting skill runtime...", kind: .success)
+        runtimeManager.start()
+        appendLine(" Starting skill runtime...", kind: .success)
     }
 
     func stopRuntime() {
-        if !runtime.isRunning {
-            appendLine("Skill runtime is already stopped.", kind: .warning)
+        if !runtimeManager.isRunning {
+            appendLine(" Skill runtime is already stopped.", kind: .warning)
             return
         }
 
-        runtime.stop()
-        appendLine("Stopping skill runtime...", kind: .warning)
+        runtimeManager.stop()
+        appendLine(" Stopping skill runtime...", kind: .warning)
+    }
+
+    func restartRuntime() {
+        appendLine(" Restarting skill runtime...", kind: .warning)
+        runtimeManager.stop()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            self.runtimeManager.start()
+            self.appendLine(" Skill runtime restarted.", kind: .success)
+        }
     }
 
     func startBot() {
-        do {
-            try RuntimeConfigWriter.writeBotRuntimeConfig()
-            appendLine("runtime-config.json written successfully.", kind: .success)
-        } catch {
-            appendLine("Failed to write runtime-config.json: \(error.localizedDescription)", kind: .error)
+        configStore.saveAll()
+
+        guard !configStore.telegramBotToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            appendLine(" Missing TELEGRAM_BOT_TOKEN in OasisConfigStore.", kind: .error)
             return
         }
 
-        if !runtime.isRunning {
-            appendLine("Runtime not running. Starting runtime first...", kind: .warning)
-            runtime.start()
+        guard !configStore.config.telegram.allowedUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            appendLine(" Missing allowedUserID in OasisConfigStore.", kind: .error)
+            return
+        }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.bot.start()
-                self.appendLine("Starting bot...", kind: .success)
+        if botManager.isRunning {
+            appendLine(" Bot is already running.", kind: .warning)
+            return
+        }
+
+        if !runtimeManager.isRunning {
+            appendLine(" Runtime not running. Starting runtime first...", kind: .warning)
+            runtimeManager.start()
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                self.configStore.saveAll()
+                self.botManager.start()
+                self.appendLine(" Starting bot...", kind: .success)
             }
             return
         }
 
-        if bot.isRunning {
-            appendLine("Bot is already running.", kind: .warning)
-            return
-        }
-
-        bot.start()
-        appendLine("Starting bot...", kind: .success)
+        botManager.start()
+        appendLine(" Starting bot...", kind: .success)
     }
 
     func stopBot() {
-        if !bot.isRunning {
-            appendLine("Bot is already stopped.", kind: .warning)
+        if !botManager.isRunning {
+            appendLine(" Bot is already stopped.", kind: .warning)
             return
         }
 
-        bot.stop()
-        appendLine("Stopping bot...", kind: .warning)
+        botManager.stop()
+        appendLine(" Stopping bot...", kind: .warning)
     }
 
-    func doctor() {
-        appendLine("Doctor report:", kind: .system)
-        appendLine("  Root path: \(OasisConfig.rootPath)", kind: .service)
-        appendLine("  Node path: \(OasisConfig.nodePath)", kind: .service)
-        appendLine("  Node exists: \(FileManager.default.isExecutableFile(atPath: OasisConfig.nodePath) ? "yes" : "no")", kind: .service)
-        appendLine("  bot.js exists: \(FileManager.default.fileExists(atPath: "\(OasisConfig.rootPath)/bot.js") ? "yes" : "no")", kind: .service)
-        appendLine("  runtime server exists: \(FileManager.default.fileExists(atPath: "\(OasisConfig.rootPath)/skill-runtime/server.js") ? "yes" : "no")", kind: .service)
-        appendLine("  runtime-config exists: \(FileManager.default.fileExists(atPath: "\(OasisConfig.rootPath)/state/runtime-config.json") ? "yes" : "no")", kind: .service)
-        appendLine("  Bot running: \(bot.isRunning ? "yes" : "no")", kind: .service)
-        appendLine("  Runtime running: \(runtime.isRunning ? "yes" : "no")", kind: .service)
+    func restartBot() {
+        appendLine(" Restarting bot...", kind: .warning)
+        botManager.stop()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            self.configStore.saveAll()
+            self.botManager.start()
+            self.appendLine(" Bot restarted.", kind: .success)
+        }
+    }
+
+    func startAll() {
+        appendLine(" Starting all services...", kind: .system)
+        configStore.saveAll()
+
+        if !runtimeManager.isRunning {
+            runtimeManager.start()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if !self.botManager.isRunning {
+                self.botManager.start()
+            }
+            self.appendLine(" All services started.", kind: .success)
+        }
+    }
+
+    func stopAll() {
+        appendLine(" Stopping all services...", kind: .system)
+
+        if botManager.isRunning {
+            botManager.stop()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            if self.runtimeManager.isRunning {
+                self.runtimeManager.stop()
+            }
+            self.appendLine(" All services stopped.", kind: .warning)
+        }
+    }
+
+    func restartAll() {
+        appendLine(" Restarting all services...", kind: .system)
+        stopAll()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            self.startAll()
+        }
     }
 
     private func printHelp() {
-        appendLine("Available commands:", kind: .system)
+        appendLine(" Available commands:", kind: .system)
         appendLine("  help", kind: .service)
         appendLine("  clear", kind: .service)
         appendLine("  status", kind: .service)
         appendLine("  doctor", kind: .service)
-        appendLine("  start all", kind: .service)
-        appendLine("  stop all", kind: .service)
-        appendLine("  restart all", kind: .service)
         appendLine("  start runtime", kind: .service)
         appendLine("  stop runtime", kind: .service)
         appendLine("  restart runtime", kind: .service)
         appendLine("  start bot", kind: .service)
         appendLine("  stop bot", kind: .service)
         appendLine("  restart bot", kind: .service)
+        appendLine("  start all", kind: .service)
+        appendLine("  stop all", kind: .service)
+        appendLine("  restart all", kind: .service)
     }
 
     private func printStatus() {
-        appendLine("Current status:", kind: .system)
-        appendLine("  Bot: \(bot.isRunning ? "Running" : "Stopped")", kind: .service)
-        appendLine("  Runtime: \(runtime.isRunning ? "Running" : "Stopped")", kind: .service)
-        appendLine("  Bot status text: \(bot.status)", kind: .service)
-        appendLine("  Runtime status text: \(runtime.status)", kind: .service)
+        appendLine(" Current status:", kind: .system)
+        appendLine("  Runtime running: \(runtimeManager.isRunning ? "yes" : "no")", kind: .service)
+        appendLine("  Runtime status: \(runtimeManager.statusText)", kind: .service)
+        appendLine("  Bot running: \(botManager.isRunning ? "yes" : "no")", kind: .service)
+        appendLine("  Bot status: \(botManager.statusText)", kind: .service)
+    }
+
+    private func doctor() {
+        appendLine(" Doctor report:", kind: .system)
+        appendLine("  Root path: /Users/edgardoramos/Oasis", kind: .service)
+        appendLine("  Node path: /usr/local/bin/node", kind: .service)
+        appendLine("  Node exists: \(FileManager.default.isExecutableFile(atPath: "/usr/local/bin/node") ? "yes" : "no")", kind: .service)
+        appendLine("  bot.js exists: \(FileManager.default.fileExists(atPath: "/Users/edgardoramos/Oasis/bot.js") ? "yes" : "no")", kind: .service)
+        appendLine("  runtime server exists: \(FileManager.default.fileExists(atPath: "/Users/edgardoramos/Oasis/skill-runtime/server.js") ? "yes" : "no")", kind: .service)
+        appendLine("  runtime-config exists: \(FileManager.default.fileExists(atPath: "/Users/edgardoramos/Oasis/state/runtime-config.json") ? "yes" : "no")", kind: .service)
+        appendLine("  telegram token present: \(configStore.telegramBotToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "no" : "yes")", kind: .service)
+        appendLine("  allowed user id present: \(configStore.config.telegram.allowedUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "no" : "yes")", kind: .service)
+        appendLine("  Runtime running: \(runtimeManager.isRunning ? "yes" : "no")", kind: .service)
+        appendLine("  Bot running: \(botManager.isRunning ? "yes" : "no")", kind: .service)
     }
 
     private func bindServiceLogs() {
-        bot.$logs
+        botManager.$logs
             .receive(on: RunLoop.main)
             .sink { [weak self] newValue in
-                self?.consumeServiceLogs(
+                guard let self else { return }
+                self.consumeServiceLogs(
                     serviceName: "bot",
                     fullText: newValue,
-                    lastLength: &self!.lastBotLogLength
+                    lastLength: &self.lastBotLogLength
                 )
             }
             .store(in: &cancellables)
 
-        runtime.$logs
+        runtimeManager.$logs
             .receive(on: RunLoop.main)
             .sink { [weak self] newValue in
-                self?.consumeServiceLogs(
+                guard let self else { return }
+                self.consumeServiceLogs(
                     serviceName: "runtime",
                     fullText: newValue,
-                    lastLength: &self!.lastRuntimeLogLength
+                    lastLength: &self.lastRuntimeLogLength
                 )
             }
             .store(in: &cancellables)
     }
 
-    private func consumeServiceLogs(serviceName: String, fullText: String, lastLength: inout Int) {
+    private func consumeServiceLogs(
+        serviceName: String,
+        fullText: String,
+        lastLength: inout Int
+    ) {
         guard fullText.count >= lastLength else {
             lastLength = fullText.count
             return
@@ -258,8 +349,9 @@ final class ServicesManager: ObservableObject {
     private func appendLine(_ text: String, kind: ConsoleLine.Kind) {
         consoleLines.append(ConsoleLine(text: text, kind: kind))
 
-        if consoleLines.count > 1200 {
-            consoleLines.removeFirst(consoleLines.count - 1200)
+        if consoleLines.count > 1500 {
+            consoleLines.removeFirst(consoleLines.count - 1500)
         }
     }
 }
+
