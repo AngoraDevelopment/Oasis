@@ -12,8 +12,8 @@ struct TelegramConfig: Codable, Equatable {
 }
 
 struct OllamaConfig: Codable, Equatable {
-    var primaryModel: String = "ollama/phi4-mini:latest"
-    var fallbackModels: [String] = ["ollama/phi4-mini:latest"]
+    var primaryModel: String = "ollama/mistral:latest"
+    var fallbackModels: [String] = ["ollama/mistral:latest"]
 }
 
 struct OasisConfig: Codable, Equatable {

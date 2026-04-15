@@ -70,6 +70,10 @@ struct ConsoleView: View {
                             ForEach(renderedHistory.indices, id: \.self) { index in
                                 renderedHistoryRow(renderedHistory[index], isLast: false)
                             }
+                            
+                            if let prompt = manager.setupCommandManager.currentPrompt {
+                                setupPromptView(prompt)
+                            }
 
                             renderedHistoryRow(currentPromptRow, isLast: true)
                                 .id("PROMPT_BOTTOM")
@@ -98,15 +102,40 @@ struct ConsoleView: View {
                 isFocused: $isInputFocused
             ) {
                 runCommand()
+            } onArrowUp: {
+                if manager.handleSetupMoveUp() {
+                    return true
+                }
+
+                if let previous = manager.previousHistoryCommand() {
+                    input = previous
+                    return true
+                }
+
+                return false
+            } onArrowDown: {
+                if manager.handleSetupMoveDown() {
+                    return true
+                }
+
+                if let next = manager.nextHistoryCommand() {
+                    input = next
+                    return true
+                }
+
+                return false
+            } onSpace: {
+                manager.handleSetupToggleSelection()
+            } onCopy: {
+                copyCurrentInput()
+            } onClear: {
+                manager.clearConsole()
             }
             .frame(width: 1, height: 1)
             .opacity(0.001)
             .padding(.bottom, 8)
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            isInputFocused = true
-        }
         .onAppear {
             isInputFocused = true
         }
@@ -155,7 +184,57 @@ struct ConsoleView: View {
             livePromptRow(currentInput, cursorVisible: cursorVisible, runtimeReady: runtimeReady)
         }
     }
+    
+    //MARK: Setup View
+    @ViewBuilder
+    private func setupPromptView(_ prompt: SetupPrompt) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Setup · \(prompt.sectionTitle)")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(0.72))
 
+            switch prompt.kind {
+            case .textInput(_, let title, let placeholder, let secure):
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.95))
+
+                Text(input.isEmpty ? placeholder : (secure ? String(repeating: "•", count: input.count) : input))
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                    .foregroundStyle(input.isEmpty ? Color.white.opacity(0.35) : Color.white.opacity(0.94))
+
+            case .singleSelection(_, let title, _),
+                 .multiSelection(_, let title, _):
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.95))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(Array(prompt.choices.enumerated()), id: \.element.id) { index, choice in
+                        HStack(spacing: 8) {
+                            Text(index == prompt.highlightedIndex ? ">" : " ")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color(nsColor: NSColor(calibratedRed: 0.81, green: 0.89, blue: 0.30, alpha: 1)))
+
+                            Text(choice.isSelected ? "●" : "○")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundStyle(choice.isSelected ? Color(nsColor: NSColor(calibratedRed: 0.58, green: 0.78, blue: 0.05, alpha: 1)) : Color.white.opacity(0.45))
+
+                            Text(choice.value)
+                                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Color.white.opacity(0.92))
+                        }
+                    }
+                }
+
+                Text("[↑ ↓] mover   [Space] seleccionar   [Enter] continuar")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.46))
+            }
+        }
+        .padding(.vertical, 6)
+    }
+    
     private func commandRow(_ command: String, createdAt: Date) -> some View {
         HStack(alignment: .center, spacing: 0) {
             HStack(spacing: 0) {
@@ -250,6 +329,10 @@ struct ConsoleView: View {
             }
         }
         .padding(.vertical, 1)
+        .contentShape(Rectangle())
+            .onTapGesture {
+                isInputFocused = true
+            }
     }
 
     private func logRow(_ style: StyledConsoleLine) -> some View {
@@ -308,6 +391,13 @@ struct ConsoleView: View {
     
     // MARK: - Helpers
     
+    private func copyCurrentInput() {
+        guard !input.isEmpty else { return }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(input, forType: .string)
+    }
+    
     private func formattedCommandTime(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
@@ -337,14 +427,30 @@ struct ConsoleView: View {
     }
     
     private func runCommand() {
+        if manager.setupCommandManager.isRunning,
+           case .singleSelection = manager.setupCommandManager.currentPrompt?.kind {
+            manager.handleSetupConfirmSelection()
+            isInputFocused = true
+            return
+        }
+
+        if manager.setupCommandManager.isRunning,
+           case .multiSelection = manager.setupCommandManager.currentPrompt?.kind {
+            manager.handleSetupConfirmSelection()
+            isInputFocused = true
+            return
+        }
+
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             isInputFocused = true
             return
         }
 
+        manager.registerCommandInHistory(trimmed)
         manager.handleCommand(trimmed)
         input = ""
+        manager.resetHistoryNavigation()
         isInputFocused = true
     }
 
@@ -396,115 +502,6 @@ struct ConsoleView: View {
             message: parsed.message,
             textColor: effectiveKind.textColor
         )
-    }
-    
-    //MARK: estilo
-    
-    private func parseConsolePrefixes(from rawText: String) -> (sourceTag: String?, message: String) {
-        var text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        var detectedTag: String?
-
-        let knownTags = ["[runtime]", "[bot]", "[stderr]"]
-
-        for tag in knownTags {
-            if text.hasPrefix(tag) {
-                detectedTag = tag
-                text = text.replacingOccurrences(of: tag, with: "", options: [.anchored])
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                break
-            }
-        }
-
-        return (detectedTag, text)
-    }
-
-    private func resolveEffectiveKind(
-        originalKind: ConsoleLine.Kind,
-        message: String,
-        sourceTag: String?
-    ) -> ConsoleLine.Kind {
-        let lower = message.lowercased()
-
-        if sourceTag == "[stderr]" {
-            return .error
-        }
-
-        if originalKind == .error || lower.contains("error") || lower.contains("failed") || lower.contains("exception") {
-            return .error
-        }
-
-        if originalKind == .warning || lower.contains("warning") || lower.contains("deteniendo") || lower.contains("termino") {
-            return .warning
-        }
-
-        if originalKind == .success || lower.contains("success") || lower.contains("iniciado") || lower.contains("activo") || lower.contains("ready") || lower.contains("finalizado") {
-            return .success
-        }
-        
-        if originalKind == .info || lower.contains("info") || lower.contains("informacion") {
-            return .info
-        }
-
-        return originalKind
-    }
-
-    private func colorForSourceTag(_ tag: String, kind: ConsoleLine.Kind) -> Color {
-        switch tag {
-        case "[runtime]":
-            if kind == .error {
-                return Color(nsColor: NSColor(calibratedRed: 0.96, green: 0.41, blue: 0.34, alpha: 1))
-            }
-            if kind == .warning {
-                return Color(nsColor: NSColor(calibratedRed: 0.97, green: 0.79, blue: 0.23, alpha: 1))
-            }
-            return Color(nsColor: NSColor(calibratedRed: 0.48, green: 0.75, blue: 0.96, alpha: 1))
-
-        case "[bot]":
-            if kind == .error {
-                return Color(nsColor: NSColor(calibratedRed: 0.96, green: 0.41, blue: 0.34, alpha: 1))
-            }
-            if kind == .warning {
-                return Color(nsColor: NSColor(calibratedRed: 0.97, green: 0.79, blue: 0.23, alpha: 1))
-            }
-            return Color(nsColor: NSColor(calibratedRed: 0.57, green: 0.86, blue: 0.42, alpha: 1))
-
-        case "[stderr]":
-            return Color(nsColor: NSColor(calibratedRed: 0.96, green: 0.41, blue: 0.34, alpha: 1))
-
-        default:
-            return kind.tagColor
-        }
-    }
-
-    private func colorForMessage(kind: ConsoleLine.Kind, sourceTag: String?) -> Color {
-        if sourceTag == "[stderr]" {
-            return Color(nsColor: NSColor(calibratedRed: 0.95, green: 0.71, blue: 0.66, alpha: 1))
-        }
-
-        switch sourceTag {
-        case "[runtime]":
-            switch kind {
-            case .error:
-                return Color(nsColor: NSColor(calibratedRed: 0.95, green: 0.71, blue: 0.66, alpha: 1))
-            case .warning:
-                return Color(nsColor: NSColor(calibratedRed: 0.93, green: 0.86, blue: 0.64, alpha: 1))
-            default:
-                return Color(nsColor: NSColor(calibratedRed: 0.76, green: 0.86, blue: 0.92, alpha: 1))
-            }
-
-        case "[bot]":
-            switch kind {
-            case .error:
-                return Color(nsColor: NSColor(calibratedRed: 0.95, green: 0.71, blue: 0.66, alpha: 1))
-            case .warning:
-                return Color(nsColor: NSColor(calibratedRed: 0.93, green: 0.86, blue: 0.64, alpha: 1))
-            default:
-                return Color(nsColor: NSColor(calibratedRed: 0.84, green: 0.91, blue: 0.82, alpha: 1))
-            }
-
-        default:
-            return kind.textColor
-        }
     }
 }
 

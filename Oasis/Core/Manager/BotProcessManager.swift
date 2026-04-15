@@ -36,7 +36,7 @@ final class BotProcessManager: ObservableObject {
         guard !isRunning else { return }
 
         guard let configStore else {
-            appendLog("error OasisConfigStore no está conectado.\n")
+            appendLog("[error] OasisConfigStore no está conectado.\n")
             statusText = "Config no disponible"
             return
         }
@@ -44,26 +44,26 @@ final class BotProcessManager: ObservableObject {
         configStore.saveAll()
 
         guard !configStore.telegramBotToken.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
-            appendLog("error Falta Telegram Bot Token.\n")
+            appendLog("[error] Falta Telegram Bot Token.\n")
             statusText = "Token faltante"
             return
         }
 
         guard !configStore.config.telegram.allowedUserID.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
-            appendLog("error Falta Allow User ID.\n")
+            appendLog("[error] Falta Allow User ID.\n")
             statusText = "User ID faltante"
             return
         }
 
         guard FileManager.default.fileExists(atPath: workingDirectory) else {
-            appendLog("error No existe la carpeta del bot: \(workingDirectory)\n")
+            appendLog("[error] No existe la carpeta del bot: \(workingDirectory)\n")
             statusText = "Ruta inválida"
             lastError = "La carpeta del bot no existe."
             return
         }
 
         guard FileManager.default.fileExists(atPath: nodePath) else {
-            appendLog("error No existe Node en: \(nodePath)\n")
+            appendLog("[error] No existe Node en: \(nodePath)\n")
             statusText = "Node no encontrado"
             lastError = "No se encontró Node en la ruta configurada."
             return
@@ -74,7 +74,6 @@ final class BotProcessManager: ObservableObject {
         let errPipe = Pipe()
 
         task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        task.arguments = ["core/boot.js"]
         task.arguments = [
             "-lc",
             "cd \(quoted(workingDirectory)) && \(quoted(nodePath)) bot.js"
@@ -131,7 +130,7 @@ final class BotProcessManager: ObservableObject {
             isRunning = false
             statusText = "Error al iniciar"
             lastError = error.localizedDescription
-            appendLog("error No se pudo iniciar el bot: \(error.localizedDescription)\n")
+            appendLog("[error] No se pudo iniciar el bot: \(error.localizedDescription)\n")
         }
     }
 

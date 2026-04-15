@@ -47,10 +47,8 @@ final class SkillRuntimeProcessManager: ObservableObject {
 
             await MainActor.run {
                 if alreadyRunning {
-                    self.isRunning = true
-                    self.ownsRunningProcess = false
-                    self.statusText = "Activo"
-                    self.appendLogImmediately("info Ya había un skill runtime corriendo en 127.0.0.1:4872.\n")
+                    self.appendLogImmediately("[aviso] Ya había un skill runtime corriendo en 127.0.0.1:4872. Se intentará limpiar y reiniciar.\n")
+                    self.forceRestartCleaningPort()
                     return
                 }
 
@@ -61,14 +59,14 @@ final class SkillRuntimeProcessManager: ObservableObject {
 
     private func startOwnedProcess() {
         guard FileManager.default.fileExists(atPath: workingDirectory) else {
-            appendLogImmediately("error No existe la carpeta base: \(workingDirectory)\n")
+            appendLogImmediately("[error] No existe la carpeta base: \(workingDirectory)\n")
             statusText = "Ruta inválida"
             lastError = "La carpeta base no existe."
             return
         }
 
         guard FileManager.default.fileExists(atPath: runtimeScriptPath) else {
-            appendLogImmediately("error No existe skill-runtime/server.js en: \(runtimeScriptPath)\n")
+            appendLogImmediately("[error] No existe skill-runtime/server.js en: \(runtimeScriptPath)\n")
             statusText = "Runtime no encontrado"
             lastError = "No se encontró server.js del skill runtime."
             return
@@ -245,5 +243,72 @@ final class SkillRuntimeProcessManager: ObservableObject {
 
     private func quoted(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+    
+    //MARK: Helpers
+    private let runtimePort = 4872
+
+    private func processIDsUsingPort(_ port: Int) -> [Int] {
+        let task = Process()
+        let pipe = Pipe()
+
+        task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        task.arguments = ["-lc", "lsof -ti :\(port)"]
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+
+            guard task.terminationStatus == 0 || task.terminationStatus == 1 else {
+                return []
+            }
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+
+            return output
+                .split(separator: "\n")
+                .compactMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        } catch {
+            return []
+        }
+    }
+
+    private func killProcesses(_ pids: [Int]) {
+        guard !pids.isEmpty else { return }
+
+        for pid in pids {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            task.arguments = ["-lc", "kill -9 \(pid)"]
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+                appendLogImmediately("[info] Proceso \(pid) terminado para liberar el puerto \(runtimePort).\n")
+            } catch {
+                appendLogImmediately("[error] No se pudo terminar el proceso \(pid): \(error.localizedDescription)\n")
+            }
+        }
+    }
+
+    func forceRestartCleaningPort() {
+        appendLogImmediately("[info] Revisando si el puerto \(runtimePort) está ocupado...\n")
+
+        let pids = processIDsUsingPort(runtimePort)
+
+        if !pids.isEmpty {
+            appendLogImmediately("[aviso] Encontré procesos usando el puerto \(runtimePort): \(pids.map(String.init).joined(separator: ", "))\n")
+            killProcesses(pids)
+            Thread.sleep(forTimeInterval: 0.35)
+        } else {
+            appendLogImmediately("[info] El puerto \(runtimePort) ya estaba libre.\n")
+        }
+
+        stop()
+        Thread.sleep(forTimeInterval: 0.25)
+        start()
     }
 }

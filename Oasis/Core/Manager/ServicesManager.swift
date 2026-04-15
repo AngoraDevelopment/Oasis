@@ -8,90 +8,10 @@
 import Foundation
 internal import Combine
 
-import SwiftUI
-
-struct ConsoleLine: Identifiable, Equatable {
-    enum Kind {
-        case input
-        case system
-        case success
-        case warning
-        case error
-        case info
-        case stop
-        case service
-
-        var symbol: String? {
-            switch self {
-            case .input: return nil
-            case .system: return AppTheme.eyeSymbol
-            case .success: return AppTheme.sucessSymbol
-            case .warning: return AppTheme.warningSymbol
-            case .error: return AppTheme.errorSymbol
-            case .info: return AppTheme.shieldSymbol
-            case .stop: return AppTheme.stopSymbol
-            case .service: return nil
-            }
-        }
-
-        var tagColor: Color {
-            switch self {
-            case .input:
-                return Color.white.opacity(0.9)
-            case .system:
-                return AppTheme.systemTagColor
-            case .success:
-                return AppTheme.sucessTagColor
-            case .warning:
-                return AppTheme.warningTagColor
-            case .error:
-                return AppTheme.errorTagColor
-            case .info:
-                return AppTheme.shieldTagColor
-            case .stop:
-                return AppTheme.errorTagColor
-            case .service:
-                return Color.white.opacity(0.72)
-            }
-        }
-
-        var textColor: Color {
-            switch self {
-            case .input:
-                return Color.white.opacity(0.9)
-            case .system:
-                return AppTheme.systemTextColor
-            case .success:
-                return AppTheme.sucessTextColor
-            case .warning:
-                return AppTheme.warningTextColor
-            case .error:
-                return AppTheme.errorTextColor
-            case .info:
-                return AppTheme.shieldTextColor
-            case .stop:
-                return AppTheme.errorTextColor
-            case .service:
-                return Color.white.opacity(0.72)
-            }
-        }
-    }
-
-    let id = UUID()
-    let text: String
-    let kind: Kind
-    let createdAt: Date
-
-    init(text: String, kind: Kind, createdAt: Date = Date()) {
-        self.text = text
-        self.kind = kind
-        self.createdAt = createdAt
-    }
-}
-
 @MainActor
 final class ServicesManager: ObservableObject {
     @Published var consoleLines: [ConsoleLine] = []
+    @Published var setupCommandManager = SetupCommandManager()
 
     let configStore: OasisConfigStore
     let botManager: BotProcessManager
@@ -100,6 +20,8 @@ final class ServicesManager: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private var lastBotLogLength: Int = 0
     private var lastRuntimeLogLength: Int = 0
+    private var commandHistory: [String] = []
+    private var historyIndex: Int? = nil
 
     @MainActor
     init(
@@ -114,6 +36,7 @@ final class ServicesManager: ObservableObject {
         self.botManager.setConfigStore(configStore)
 
         bindServiceLogs()
+        setupCommandManager.bindConfigStore(configStore)
     }
 
     @MainActor
@@ -139,46 +62,76 @@ final class ServicesManager: ObservableObject {
         guard !command.isEmpty else { return }
 
         appendLine("Oasis % \(command)", kind: .input)
+        
+        if command.lowercased() == "/setup start" {
+            do {
+                let lines = try setupCommandManager.start()
+                lines.forEach { appendLine($0.text, kind: $0.kind) }
+            } catch {
+                appendLine("No se pudo iniciar el setup: \(error.localizedDescription)", kind: .error)
+            }
+            return
+        }
 
+        if command.lowercased() == "/setup cancel" {
+            let lines = setupCommandManager.cancel()
+            lines.forEach { appendLine($0.text, kind: $0.kind) }
+            return
+        }
+
+        if setupCommandManager.isRunning {
+            do {
+                let lines = try setupCommandManager.handleTextSubmit(command)
+                lines.forEach { appendLine($0.text, kind: $0.kind) }
+            } catch {
+                appendLine("Error en setup: \(error.localizedDescription)", kind: .error)
+            }
+            return
+        }
+        
         switch command.lowercased() {
-        case "help":
+        case "/help":
             printHelp()
 
-        case "clear":
+        case "/clear":
             consoleLines.removeAll()
             appendSystemLog("Console cleared.")
 
-        case "status":
+        case "/status":
             printStatus()
 
-        case "doctor":
+        case "/doctor":
             doctor()
 
-        case "start runtime":
+        case "/start runtime":
             startRuntime()
 
-        case "stop runtime":
+        case "/stop runtime":
             stopRuntime()
 
-        case "restart runtime":
+        case "/restart runtime":
             restartRuntime()
+            
+        case "/clean runtime":
+            appendLine("Cleaning runtime port and restarting runtime...", kind: .warning)
+            runtimeManager.forceRestartCleaningPort()
 
-        case "start bot":
+        case "/start bot":
             startBot()
 
-        case "stop bot":
+        case "/stop bot":
             stopBot()
 
-        case "restart bot":
+        case "/restart bot":
             restartBot()
 
-        case "start all":
+        case "/start all":
             startAll()
 
-        case "stop all":
+        case "/stop all":
             stopAll()
 
-        case "restart all":
+        case "/restart all":
             restartAll()
 
         default:
@@ -186,7 +139,35 @@ final class ServicesManager: ObservableObject {
             appendLine(" Type 'help' to see available commands.", kind: .warning)
         }
     }
+    
+    func handleSetupMoveUp() -> Bool {
+        guard isSetupSelectionMode() else { return false }
+        setupCommandManager.moveUp()
+        return true
+    }
 
+    func handleSetupMoveDown() -> Bool {
+        guard isSetupSelectionMode() else { return false }
+        setupCommandManager.moveDown()
+        return true
+    }
+
+    func handleSetupToggleSelection() {
+        guard setupCommandManager.isRunning else { return }
+        setupCommandManager.toggleSelection()
+    }
+
+    func handleSetupConfirmSelection() {
+        guard setupCommandManager.isRunning else { return }
+
+        do {
+            let lines = try setupCommandManager.confirmSelection()
+            lines.forEach { appendLine($0.text, kind: $0.kind) }
+        } catch {
+            appendLine("Error confirmando selección: \(error.localizedDescription)", kind: .error)
+        }
+    }
+    
     func appendSystemLog(_ text: String) {
         appendLine(text, kind: .system)
     }
@@ -277,18 +258,20 @@ final class ServicesManager: ObservableObject {
     }
 
     func startAll() {
-        appendLine(" Starting all services...", kind: .system)
+        appendLine("Starting all services...", kind: .system)
         configStore.saveAll()
 
-        if !runtimeManager.isRunning {
-            runtimeManager.start()
-        }
+        runtimeManager.forceRestartCleaningPort()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            if !self.botManager.isRunning {
-                self.botManager.start()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            if self.botManager.isRunning {
+                self.botManager.stop()
             }
-            self.appendLine(" All services started.", kind: .success)
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.botManager.start()
+                self.appendLine("All services started.", kind: .success)
+            }
         }
     }
 
@@ -317,7 +300,7 @@ final class ServicesManager: ObservableObject {
     }
 
     private func printHelp() {
-        appendLine(" Available commands:", kind: .system)
+        appendLine("  Available commands:", kind: .system)
         appendLine("  help", kind: .service)
         appendLine("  clear", kind: .service)
         appendLine("  status", kind: .service)
@@ -325,6 +308,7 @@ final class ServicesManager: ObservableObject {
         appendLine("  start runtime", kind: .service)
         appendLine("  stop runtime", kind: .service)
         appendLine("  restart runtime", kind: .service)
+        appendLine("  clean runtime", kind: .service)
         appendLine("  start bot", kind: .service)
         appendLine("  stop bot", kind: .service)
         appendLine("  restart bot", kind: .service)
@@ -334,7 +318,7 @@ final class ServicesManager: ObservableObject {
     }
 
     private func printStatus() {
-        appendLine(" Current status:", kind: .system)
+        appendLine("  Current status:", kind: .system)
         appendLine("  Runtime running: \(runtimeManager.isRunning ? "yes" : "no")", kind: .service)
         appendLine("  Runtime status: \(runtimeManager.statusText)", kind: .service)
         appendLine("  Bot running: \(botManager.isRunning ? "yes" : "no")", kind: .service)
@@ -342,7 +326,7 @@ final class ServicesManager: ObservableObject {
     }
 
     private func doctor() {
-        appendLine(" Doctor report:", kind: .system)
+        appendLine("  Doctor report:", kind: .system)
         appendLine("  Root path: /Users/edgardoramos/Oasis", kind: .service)
         appendLine("  Node path: /usr/local/bin/node", kind: .service)
         appendLine("  Node exists: \(FileManager.default.isExecutableFile(atPath: "/usr/local/bin/node") ? "yes" : "no")", kind: .service)
@@ -410,6 +394,101 @@ final class ServicesManager: ObservableObject {
 
         if consoleLines.count > 1500 {
             consoleLines.removeFirst(consoleLines.count - 1500)
+        }
+    }
+    
+    func handleSetupToggleSelection() -> Bool {
+        guard setupCommandManager.isRunning else { return false }
+
+        if let prompt = setupCommandManager.currentPrompt {
+            switch prompt.kind {
+            case .singleSelection, .multiSelection:
+                setupCommandManager.toggleSelection()
+                return true
+            default:
+                return false
+            }
+        }
+
+        return false
+    }
+    
+    func registerCommandInHistory(_ command: String) {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if commandHistory.last != trimmed {
+            commandHistory.append(trimmed)
+        }
+
+        historyIndex = nil
+    }
+
+    func previousHistoryCommand() -> String? {
+        guard !commandHistory.isEmpty else { return nil }
+
+        if let index = historyIndex {
+            historyIndex = max(0, index - 1)
+        } else {
+            historyIndex = commandHistory.count - 1
+        }
+
+        guard let index = historyIndex, commandHistory.indices.contains(index) else {
+            return nil
+        }
+
+        return commandHistory[index]
+    }
+
+    func nextHistoryCommand() -> String? {
+        guard !commandHistory.isEmpty else { return nil }
+
+        guard let index = historyIndex else {
+            return ""
+        }
+
+        let next = index + 1
+
+        if next >= commandHistory.count {
+            historyIndex = nil
+            return ""
+        }
+
+        historyIndex = next
+        return commandHistory[next]
+    }
+
+    func resetHistoryNavigation() {
+        historyIndex = nil
+    }
+
+    func clearConsole() {
+        consoleLines.removeAll()
+    }
+    
+    func isSetupSelectionMode() -> Bool {
+        guard setupCommandManager.isRunning,
+              let prompt = setupCommandManager.currentPrompt
+        else { return false }
+
+        switch prompt.kind {
+        case .singleSelection, .multiSelection:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func isSetupTextInputMode() -> Bool {
+        guard setupCommandManager.isRunning,
+              let prompt = setupCommandManager.currentPrompt
+        else { return false }
+
+        switch prompt.kind {
+        case .textInput:
+            return true
+        default:
+            return false
         }
     }
 }
